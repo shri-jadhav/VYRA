@@ -51,9 +51,9 @@ config
 *.db
 *.sqlite
 *.sqlite3
-data/
-evidence_store/
-reports/
+/data/
+/evidence_store/
+/reports/
 *.sarif
 
 # Testing and Quality

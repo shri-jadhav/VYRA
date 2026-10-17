@@ -16,5 +16,5 @@ rich>=13.7.0,<16.0.0
 # Testing and Code Quality
 pytest>=8.0.0
 pytest-asyncio>=0.23.0
-ruff==0.17.1
+ruff>=0.4.0
 bandit>=1.7.0
