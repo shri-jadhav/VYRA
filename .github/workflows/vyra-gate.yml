@@ -1,0 +1,76 @@
+name: "VYRA Security Regression Gate"
+
+on:
+  pull_request:
+    branches:
+      - main
+      - master
+    paths:
+      - "**.tf"
+      - "tfplan.json"
+      - "backend/**"
+      - ".github/workflows/vyra-gate.yml"
+
+permissions:
+  contents: read
+  security-events: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  vyra-plan-gate:
+    name: "Inspect Terraform Plan for Security Regressions"
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: "Checkout repository"
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: "Set up Python"
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: "Install VYRA dependencies"
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r backend/requirements.txt
+
+      - name: "Check for Terraform Plan JSON"
+        id: check_plan
+        run: |
+          if [ -f "tfplan.json" ]; then
+            echo "plan_exists=true" >> "$GITHUB_OUTPUT"
+            echo "Plan JSON found at tfplan.json."
+          else
+            echo "plan_exists=false" >> "$GITHUB_OUTPUT"
+            echo "No tfplan.json provided in PR. Skipping offline plan gate."
+            echo "### VYRA Security Gate: Skipped" >> "$GITHUB_STEP_SUMMARY"
+            echo "No \`tfplan.json\` was provided in this pull request. If this PR modifies infrastructure, please supply an offline plan JSON." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: "Run VYRA Terraform Plan Gate"
+        if: steps.check_plan.outputs.plan_exists == 'true'
+        run: |
+          python -m backend.app.plan_checker.cli check tfplan.json --format sarif --output vyra.sarif --fail-on-violation
+
+      - name: "Publish Gate Summary to Actions Tab"
+        if: always() && steps.check_plan.outputs.plan_exists == 'true'
+        run: |
+          echo "### VYRA Security Regression Gate Results" >> "$GITHUB_STEP_SUMMARY"
+          if [ -f "vyra.sarif" ]; then
+            echo "SARIF report generated successfully (\`vyra.sarif\`)." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: "Upload SARIF report to GitHub Code Scanning"
+        if: always() && hashFiles('vyra.sarif') != ''
+        continue-on-error: true
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: vyra.sarif
+          category: "vyra-plan-checker"

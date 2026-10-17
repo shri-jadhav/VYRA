@@ -1,0 +1,115 @@
+name: "VYRA CI"
+
+on:
+  push:
+    branches:
+      - main
+      - master
+  pull_request:
+    branches:
+      - main
+      - master
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend-tests:
+    name: "Python ${{ matrix.python-version }} Offline Tests & Lint"
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
+
+    steps:
+      - name: "Checkout repository"
+        uses: actions/checkout@v4
+
+      - name: "Set up Python ${{ matrix.python-version }}"
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: "pip"
+
+      - name: "Install dependencies"
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: "Lint with Ruff"
+        run: |
+          ruff check backend/
+
+      - name: "Run Offline Pytest Suite"
+        run: |
+          pytest -v
+
+  frontend-check:
+    name: "Frontend Lint & Production Build"
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: "Checkout repository"
+        uses: actions/checkout@v4
+
+      - name: "Set up Node.js"
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: "frontend/package-lock.json"
+
+      - name: "Install frontend dependencies"
+        working-directory: ./frontend
+        run: |
+          npm ci || npm install
+
+      - name: "Run Oxlint"
+        working-directory: ./frontend
+        run: |
+          npm run lint
+
+      - name: "Build Production Bundle"
+        working-directory: ./frontend
+        run: |
+          npm run build
+
+  plan-gate-verification:
+    name: "Verify Terraform Plan Security Gate CLI"
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: "Checkout repository"
+        uses: actions/checkout@v4
+
+      - name: "Set up Python"
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: "pip"
+
+      - name: "Install dependencies"
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: "Verify Insecure Plan Triggers Security Gate (Exit Code 1)"
+        run: |
+          set +e
+          python -m backend.app.cli plan-check --plan backend/app/fixtures/plans/insecure_regression_plan.json --format sarif --output test-insecure.sarif
+          EXIT_CODE=$?
+          if [ $EXIT_CODE -ne 1 ]; then
+            echo "Expected exit code 1 for insecure plan, got $EXIT_CODE"
+            exit 1
+          fi
+          echo "Insecure plan correctly blocked with exit code 1."
+
+      - name: "Verify Remediated Plan Passes Gate (Exit Code 0)"
+        run: |
+          python -m backend.app.cli plan-check --plan backend/app/fixtures/plans/remediated_secure_plan.json --format table
+          echo "Remediated plan successfully passed."
